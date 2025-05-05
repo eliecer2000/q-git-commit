@@ -1,0 +1,13 @@
+# Archivos temporales
+*.tmp
+*.temp
+/tmp
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración local
+.idea/
+.vscode/
+*.sublime-*
