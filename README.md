@@ -23,7 +23,7 @@ Un plugin para Oh My Zsh que utiliza Amazon Q para analizar cambios en Git y gen
 1. Clona este repositorio en la carpeta de plugins personalizados de Oh My Zsh:
 
 ```bash
-git clone https://github.com/TU_USUARIO/q-git-commit-plugin.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/q-git-commit
+git clone https://github.com/eliecer2000/q-git-commit-plugin.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/q-git-commit
 ```
 
 2. Agrega el plugin a la lista de plugins en tu archivo `.zshrc`:
@@ -49,6 +49,7 @@ qc
 ```
 
 El plugin:
+
 1. Analizará los cambios en tu repositorio
 2. Utilizará Amazon Q para generar un mensaje de commit adecuado
 3. Te mostrará el mensaje y te dará opciones para:
