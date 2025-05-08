@@ -1,0 +1,5 @@
+# Configuración para qcommit
+ticket_code = OD-454
+confirm_commit = s
+confirm_push = s
+unverified_commit = n
