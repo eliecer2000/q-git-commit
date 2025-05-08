@@ -8,6 +8,7 @@ confirm_push=""
 unverified_commit=""
 language=""
 qcommit_config_file=""
+use_ticket=""
 
 # Load or initialize configuration for the plugin.
 _qcommit_ensure_config() {
@@ -21,6 +22,7 @@ _qcommit_ensure_config() {
   qcommit_config_file="$repo_root/.qcommitrc.yml"
   # Load existing config if present
   if [[ -f "$qcommit_config_file" ]]; then
+    use_ticket=$(grep '^use_ticket:' "$qcommit_config_file" | grep -q true && echo "yes" || echo "no")
     ticket_code=$(grep '^ticket_code:' "$qcommit_config_file" | sed -E 's/^ticket_code:[[:space:]]*"?([^"]*)"?/\1/')
     confirm_commit=$(grep '^confirm_commit:' "$qcommit_config_file" | grep -q true && echo "yes" || echo "no")
     confirm_push=$(grep '^confirm_push:' "$qcommit_config_file" | grep -q true && echo "yes" || echo "no")
@@ -28,14 +30,29 @@ _qcommit_ensure_config() {
     language=$(grep '^language:' "$qcommit_config_file" | sed 's/^language:[[:space:]]*"\?\(.*\)"\?/\1/')
   fi
   # If config is missing or incomplete (except ticket_code which may be empty by intent), prompt for all values
-  if [[ ! -f "$qcommit_config_file" || -z "$confirm_commit" || -z "$confirm_push" || -z "$unverified_commit" || -z "$language" ]]; then
+  if [[ ! -f "$qcommit_config_file" || -z "$confirm_commit" || -z "$confirm_push" || -z "$unverified_commit" || -z "$language" || -z "$use_ticket" ]]; then
     echo "Configuring q-git-commit plugin settings..."
     local input input_lower
-    # 1. Ticket code (can be empty if no ticket)
-    printf "Ticket code (e.g. JIRA-123) [%s]: " "$ticket_code"
+    # 0. Use ticket codes in commits?
+    printf "Do you want to use ticket codes in commits? (yes/no) [%s]: " "$use_ticket"
     read input
-    if [[ -n "$input" ]]; then
-      ticket_code="$input"
+    input_lower=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+    if [[ "$input_lower" = yes || "$input_lower" = y ]]; then
+      use_ticket="yes"
+    elif [[ "$input_lower" = no || "$input_lower" = n ]]; then
+      use_ticket="no"
+    elif [[ -n "$input" ]]; then
+      use_ticket="$input_lower"
+    fi
+    [[ -z "$use_ticket" ]] && use_ticket="no"
+
+    if [[ "$use_ticket" = "yes" ]]; then
+      # 1. Ticket code (can be empty if no ticket)
+      printf "Ticket code (e.g. JIRA-123) [%s]: " "$ticket_code"
+      read input
+      if [[ -n "$input" ]]; then
+        ticket_code="$input"
+      fi
     fi
     # 2. Confirm commit message before committing?
     printf "Confirm commit message before committing? (yes/no) [%s]: " "$confirm_commit"
@@ -81,6 +98,7 @@ _qcommit_ensure_config() {
       language="$input_lower"
     fi
     [[ -z "$language" ]] && language="en"
+
     # Ensure consistency: if no ticket code given but unverified not allowed, adjust setting
     if [[ -z "$ticket_code" && "$unverified_commit" = "no" ]]; then
       echo "No ticket code provided, but unverified commits are disallowed. Enabling unverified commits."
@@ -93,6 +111,7 @@ _qcommit_ensure_config() {
       echo "confirm_push: $([[ \"$confirm_push\" == \"yes\" ]] && echo true || echo false)"
       echo "unverified_commit: $([[ \"$unverified_commit\" == \"yes\" ]] && echo true || echo false)"
       echo "language: \"$language\""
+      echo "use_ticket: $([[ \"$use_ticket\" == \"yes\" ]] && echo true || echo false)"
     } >"$qcommit_config_file"
     # Add .qcommitrc.yml to .gitignore if not already ignored
     local gitignore="$repo_root/.gitignore"
@@ -107,6 +126,9 @@ _qcommit_ensure_config() {
 
 # Confirm or update the ticket code for the current commit.
 _qcommit_confirm_ticket_code() {
+  if [[ "$use_ticket" = "no" ]]; then
+    return 0
+  fi
   local input new_code
   if [[ -z "$ticket_code" ]]; then
     # No ticket code set
@@ -186,7 +208,7 @@ _qcommit_generate_message() {
   fi
   prompt="$prompt for all changes"
   if [[ -n "$ticket_code" ]]; then
-    prompt="$prompt. in case a ticket code exists the ticket code $ticket_code should be included as part of the conventional commit example commit feat($ticket_code)"
+    prompt="$prompt. If a ticket code exists, include the ticket code $ticket_code as part of the conventional commit example feat($ticket_code)"
 
   fi
   # Call Amazon Q Developer CLI with the git context
@@ -232,10 +254,10 @@ _qcommit_generate_message() {
   if echo "$CLEAN_MSG" | grep -q "^feat:\|^fix:\|^docs:\|^style:\|^refactor:\|^perf:\|^test:\|^build:\|^ci:\|^chore:\|^revert:"; then
     q_output=$(echo "$CLEAN_MSG" | grep -A 50 "^feat:\|^fix:\|^docs:\|^style:\|^refactor:\|^perf:\|^test:\|^build:\|^ci:\|^chore:\|^revert:")
   else
-    if echo "$CLEAN_MSG" | grep -q "El mensaje de commit adecuado sería:"; then
-      q_output=$(echo "$CLEAN_MSG" | sed -n '/El mensaje de commit adecuado sería:/,/^$/p' | tail -n +2)
-    elif echo "$CLEAN_MSG" | grep -q "El mensaje de commit sería:"; then
-      q_output=$(echo "$CLEAN_MSG" | sed -n '/El mensaje de commit sería:/,/^$/p' | tail -n +2)
+    if echo "$CLEAN_MSG" | grep -q "The appropriate commit message would be:"; then
+      q_output=$(echo "$CLEAN_MSG" | sed -n '/The appropriate commit message would be:/,/^$/p' | tail -n +2)
+    elif echo "$CLEAN_MSG" | grep -q "The commit message would be:"; then
+      q_output=$(echo "$CLEAN_MSG" | sed -n '/The commit message would be:/,/^$/p' | tail -n +2)
     else
       q_output="$CLEAN_MSG"
     fi
@@ -265,58 +287,10 @@ _qcommit_perform_commit() {
   # If confirm_commit is "no", commit directly without prompt
   if [[ "$confirm_commit" = "no" ]]; then
     # Ensure ticket code is included if required
-    if [[ -n "$ticket_code" && "$unverified_commit" = "no" && "$commit_msg" != *"$ticket_code"* ]]; then
+    if [[ "$use_ticket" = "yes" && -n "$ticket_code" && "$unverified_commit" = "no" && "$commit_msg" != *"$ticket_code"* ]]; then
       echo "Commit message is missing ticket code '$ticket_code', which is required. Aborting commit."
       return 1
     fi
-    # Commit using a temp file to preserve formatting
-    local tmpfile="$(mktemp)"
-    printf "%s\n" "$commit_msg" >"$tmpfile"
-    git commit -F "$tmpfile"
-    local commit_status=$?
-    rm -f "$tmpfile"
-    if [[ $commit_status -ne 0 ]]; then
-      echo "git commit failed. Aborting."
-      return 1
-    fi
-    if [[ "$confirm_push" = "yes" ]]; then
-      echo "Pushing changes..."
-      git push
-    fi
-    return 0
-  fi
-  # If confirm_commit is "yes", prompt the user to confirm or edit the message
-  echo "Generated commit message:"
-  echo "---------------------------------------"
-  echo "$commit_msg"
-  echo "---------------------------------------"
-  echo "Use this commit message? [Y/n] (Yes, No)"
-  local input
-  read input
-  local input_lower="$(echo "$input" | tr '[:upper:]' '[:lower:]')"
-  # TODO: Uncomment this block to allow editing the commit message
-  # if [[ "$input_lower" = e || "$input_lower" = edit ]]; then
-  #   # Open the commit message in an editor for editing
-  #   local editor="${VISUAL:-${EDITOR:-vi}}"
-  #   local tmpfile="$(mktemp)"
-  #   printf "%s\n" "$commit_msg" >"$tmpfile"
-  #   $editor "$tmpfile"
-  #   if [[ ! -s "$tmpfile" ]]; then
-  #     echo "Commit message is empty. Aborting."
-  #     rm -f "$tmpfile"
-  #     return 1
-  #   fi
-  #   git commit -F "$tmpfile"
-  #   local commit_status=$?
-  #   rm -f "$tmpfile"
-  #   if [[ $commit_status -ne 0 ]]; then
-  #     echo "git commit failed. Aborting."
-  #     return 1
-  #   fi
-  if [[ "$input_lower" = n || "$input_lower" = no ]]; then
-    echo "Commit aborted by user."
-    return 1
-  else
     git add -A
     if [[ "$unverified_commit" = "yes" ]]; then
       git commit -m "$commit_msg" --no-verify
@@ -324,13 +298,75 @@ _qcommit_perform_commit() {
       git commit -m "$commit_msg"
     fi
     local commit_status=$?
-    rm -f "$tmpfile"
     if [[ $commit_status -ne 0 ]]; then
       echo "git commit failed. Aborting."
       return 1
     fi
+    if [[ "$confirm_push" = "no" ]]; then
+      echo "Pushing changes..."
+      git push
+      return 0
+    fi
   fi
+  if [[ "$confirm_commit" = "yes" ]]; then
+    # If confirm_commit is "yes", prompt the user to confirm or edit the message
+    echo "Generated commit message:"
+    echo "---------------------------------------"
+    echo "$commit_msg"
+    echo "---------------------------------------"
+    echo "Use this commit message? [Y/n] (Yes, No)"
+    local input
+    read input
+    local input_lower="$(echo "$input" | tr '[:upper:]' '[:lower:]')"
+    # TODO: Uncomment this block to allow editing the commit message
+    # if [[ "$input_lower" = e || "$input_lower" = edit ]]; then
+    #   # Open the commit message in an editor for editing
+    #   local editor="${VISUAL:-${EDITOR:-vi}}"
+    #   local tmpfile="$(mktemp)"
+    #   printf "%s\n" "$commit_msg" >"$tmpfile"
+    #   $editor "$tmpfile"
+    #   if [[ ! -s "$tmpfile" ]]; then
+    #     echo "Commit message is empty. Aborting."
+    #     rm -f "$tmpfile"
+    #     return 1
+    #   fi
+    #   git commit -F "$tmpfile"
+    #   local commit_status=$?
+    #   rm -f "$tmpfile"
+    #   if [[ $commit_status -ne 0 ]]; then
+    #     echo "git commit failed. Aborting."
+    #     return 1
+    #   fi
+    if [[ "$input_lower" = n || "$input_lower" = no ]]; then
+      echo "Commit aborted by user."
+      return 1
+    else
+      git add -A
+      if [[ "$unverified_commit" = "yes" ]]; then
+        git commit -m "$commit_msg" --no-verify
+      else
+        git commit -m "$commit_msg"
+      fi
+      local commit_status=$?
+      if [[ $commit_status -ne 0 ]]; then
+        echo "git commit failed. Aborting."
+        return 1
+      fi
+    fi
+  fi
+
   if [[ "$confirm_push" = "yes" ]]; then
+    echo "Push changes to remote? [Y/n]: "
+    read input
+    input_lower=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+    if [[ -z "$input_lower" || "$input_lower" = y || "$input_lower" = yes ]]; then
+      echo "Pushing changes..."
+      git push
+    else
+      echo "Push skipped."
+    fi
+  else
+
     echo "Pushing changes..."
     git push
   fi
